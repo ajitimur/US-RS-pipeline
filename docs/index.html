@@ -4,35 +4,60 @@
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <title>US RS Dashboard</title>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
   <style>
-    :root{--bg:#0d0f14;--fg:#dbe3ef;--muted:#9ca8ba;--line:#1f2533;--blue:#4ea1ff;--green:#31d07f;--amber:#f2b544;--red:#ff5f6d}
-    body{margin:0;background:var(--bg);color:var(--fg);font-family:'IBM Plex Sans',system-ui,sans-serif}
-    .mono{font-family:'IBM Plex Mono',ui-monospace,monospace}
-    .wrap{max-width:1440px;margin:0 auto;padding:16px}
-    .head{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
-    .meta{font-size:13px;color:var(--muted)}
-    .btn{background:#141b28;border:1px solid var(--line);color:var(--fg);padding:8px 10px;border-radius:8px;cursor:pointer}
-    .tabs{display:flex;gap:6px;flex-wrap:wrap;margin:14px 0}
-    .tab{padding:8px 12px;border:1px solid var(--line);background:#111726;border-radius:8px;cursor:pointer}
-    .tab.active{outline:2px solid var(--blue)}
-    .panel{display:none}.panel.active{display:block}
-    .controls{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0 12px}
-    table{width:100%;border-collapse:collapse;font-size:12px}
-    th,td{border-bottom:1px solid var(--line);padding:7px 8px;text-align:right}
+    :root{
+      --bg:#0d0f14;--bg2:#131620;--bg3:#1a1e2e;--bg4:#1f2436;
+      --border:#2a2f45;--border2:#343b56;
+      --text:#e2e8f8;--text2:#8892b0;--text3:#4a5578;
+      --green:#22d3a0;--amber:#f5a623;--red:#f06060;--blue:#4f8ef7;--purple:#a78bfa;
+    }
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{background:var(--bg);color:var(--text);font-family:'IBM Plex Sans',sans-serif;font-size:13px;min-height:100vh}
+    .mono{font-family:'IBM Plex Mono',monospace}
+    .wrap{width:100%}
+    .head{background:var(--bg2);border-bottom:1px solid var(--border);padding:12px 24px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+    .head h2{font-family:'IBM Plex Mono',monospace;font-size:15px;font-weight:600;letter-spacing:.05em}
+    .meta{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--text3)}
+    .btn{font-family:'IBM Plex Mono',monospace;font-size:10px;font-weight:600;padding:5px 12px;border-radius:4px;border:1px solid var(--border2);background:var(--bg3);color:var(--text2);cursor:pointer;transition:all .15s;white-space:nowrap}
+    .btn:hover{border-color:var(--blue);color:var(--blue)}
+    .tabs{display:flex;gap:2px;padding:0 24px;background:var(--bg2);border-bottom:1px solid var(--border);overflow-x:auto}
+    .tab{font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:500;padding:10px 16px;cursor:pointer;border-bottom:2px solid transparent;color:var(--text3);letter-spacing:.04em;transition:all .15s;white-space:nowrap;background:transparent;border-top:none;border-left:none;border-right:none}
+    .tab:hover{color:var(--text2)}
+    .tab.active{color:var(--blue);border-bottom-color:var(--blue)}
+    #panels{padding:20px 24px}
+    .panel{display:none}
+    .panel.active{display:block}
+    .controls{display:flex;align-items:center;gap:7px;margin-bottom:14px;flex-wrap:wrap}
+    label{font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--text3);letter-spacing:.04em}
+    input[type="checkbox"]{margin-right:5px}
+    .chips{display:flex;gap:4px;align-items:center}
+    .pill{font-family:'IBM Plex Mono',monospace;font-size:10px;font-weight:600;padding:3px 9px;border-radius:12px;border:1px solid var(--border2);background:transparent;color:var(--text3);cursor:pointer;transition:all .15s;white-space:nowrap}
+    .pill:hover{border-color:var(--text2);color:var(--text2)}
+    .pill.active{background:rgba(79,142,247,.15);border-color:var(--blue);color:var(--blue)}
+    .table-wrap, table{width:100%}
+    .table-wrap{overflow-x:auto;border:1px solid var(--border);border-radius:6px}
+    table{border-collapse:collapse;font-family:'IBM Plex Mono',monospace;font-size:11.5px}
+    thead{background:var(--bg3);position:sticky;top:0;z-index:10}
+    thead tr{border-bottom:1px solid var(--border2)}
+    th{padding:8px 10px;text-align:right;color:var(--text3);font-weight:500;font-size:10px;letter-spacing:.06em;white-space:nowrap;cursor:pointer;user-select:none;transition:color .15s}
     th:first-child,td:first-child{text-align:left}
-    th{cursor:pointer;position:sticky;top:0;background:#111726}
-    .badge{padding:2px 8px;border-radius:999px;font-size:11px}
-    .sector{background:#1d2a42}.exch{background:#2a2444}.tf{background:#1f3a2a}
-    .g{color:var(--green)}.r{color:var(--red)}.a{color:var(--amber)}
-    .chips{display:flex;gap:6px;flex-wrap:wrap}
-    .pill{padding:5px 10px;border-radius:999px;border:1px solid var(--line);cursor:pointer;background:#111726}
-    .pill.active{outline:2px solid var(--green)}
-    .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px}
-    .card{background:#111726;border:1px solid var(--line);border-radius:10px;padding:12px}
-    .bar{height:8px;background:#1b2130;border-radius:999px;overflow:hidden}
-    .bar>span{display:block;height:100%;background:linear-gradient(90deg,#2db6ff,#31d07f)}
-    .modal{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:center;justify-content:center;padding:20px}
-    .modal.open{display:flex}.modal-box{background:#101522;border:1px solid var(--line);border-radius:12px;max-width:980px;width:100%;max-height:88vh;overflow:auto;padding:14px}
+    th:hover{color:var(--text2)}
+    td{padding:7px 10px;text-align:right;white-space:nowrap;border-bottom:1px solid rgba(42,47,69,.5)}
+    tbody tr:hover{background:rgba(255,255,255,.025)}
+    .badge{display:inline-block;font-size:9px;padding:2px 6px;border-radius:3px;font-family:'IBM Plex Mono',monospace;font-weight:500;white-space:nowrap}
+    .sector{background:rgba(79,142,247,.1);color:var(--blue);border:1px solid rgba(79,142,247,.3)}
+    .exch{background:rgba(167,139,250,.1);color:var(--purple);border:1px solid rgba(167,139,250,.3)}
+    .g{color:var(--green)} .r{color:var(--red)} .a{color:var(--amber)}
+    .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:14px}
+    .card{background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:16px}
+    .card:hover{border-color:var(--border2)}
+    .bar{height:5px;background:var(--bg4);border-radius:3px;overflow:hidden}
+    .bar>span{display:block;height:100%;background:linear-gradient(90deg,#4f8ef7,#22d3a0)}
+    .modal{position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:1000;display:none;align-items:center;justify-content:center;padding:20px}
+    .modal.open{display:flex}
+    .modal-box{background:var(--bg2);border:1px solid var(--border2);border-radius:10px;width:100%;max-width:980px;max-height:90vh;overflow:auto;padding:16px}
+    .modal-box h3{font-family:'IBM Plex Mono',monospace;font-size:13px}
   </style>
 </head>
 <body><div class="wrap">
@@ -127,7 +152,7 @@ function tableHtml(tab,rows,cols){
   const shown = cols.filter(c=>rows.some(r=>r[c]!==null && r[c]!==undefined && r[c]!=='' ));
   const hdr = shown.map(c=>headerCell(tab,c,c)).join('');
   const body = rows.map(r=>`<tr>${shown.map(c=>td(c,r[c])).join('')}</tr>`).join('');
-  return `<div style="overflow:auto"><table><thead><tr>${hdr}</tr></thead><tbody>${body}</tbody></table></div>`;
+  return `<div class="table-wrap"><table><thead><tr>${hdr}</tr></thead><tbody>${body}</tbody></table></div>`;
 }
 
 function controlsLeader(tab){
