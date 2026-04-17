@@ -1,0 +1,29 @@
+# Python cache and artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# OS/editor files
+.DS_Store
+.idea/
+.vscode/
+
+# Large/generated run artifacts
+outputs/rankings/*.csv
+outputs/industries/*.csv
+outputs/diagnostics/*.csv
+outputs/us_rs_dashboard_*.html
+
+# Keep dashboard publish target tracked
+!docs/
+!docs/index.html

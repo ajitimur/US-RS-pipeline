@@ -1,0 +1,28 @@
+name: Daily US RS
+
+on:
+  schedule:
+    - cron: "30 21 * * 1-5"
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - run: python fetch_and_enrich.py
+        env:
+          US_MAX_WORKERS: ${{ vars.US_MAX_WORKERS || '10' }}
+          US_REQUEST_DELAY: ${{ vars.US_REQUEST_DELAY || '0.3' }}
+      - run: python build_dashboard.py
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/ outputs/
+          git diff --cached --quiet || git commit -m "Daily US RS update $(date +'%Y-%m-%d')"
+          git push
