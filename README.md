@@ -7,7 +7,7 @@ Daily US market Relative Strength (RS) pipeline that:
 3. Builds a self-contained HTML dashboard
 4. Publishes `docs/index.html` for GitHub Pages
 
-**Live dashboard:** https://ajitimur.github.io/us-relative-strength/
+**Live dashboard:** https://ajitimur.github.io/US-RS-pipeline/
 
 This project mirrors the [IDX RS workflow](https://github.com/ajitimur/IHSG-relative-strength-percentile) style, but skips local RS recomputation and consumes Fred's daily CSV as the primary data source.
 
