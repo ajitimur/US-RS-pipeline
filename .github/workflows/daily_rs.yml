@@ -16,8 +16,8 @@ jobs:
       - run: pip install -r requirements.txt
       - run: python fetch_and_enrich.py
         env:
-          US_MAX_WORKERS: "10"
-          US_REQUEST_DELAY: "0.3"
+          US_MAX_WORKERS: ${{ vars.US_MAX_WORKERS || '10' }}
+          US_REQUEST_DELAY: ${{ vars.US_REQUEST_DELAY || '0.3' }}
       - run: python build_dashboard.py
       - name: Commit and push
         run: |
