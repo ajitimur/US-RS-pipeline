@@ -221,14 +221,12 @@ def default_template() -> tuple[str, str, str]:
 <script>
 """
     b = """
-const state = { data: EMBEDDED, activeTab: 'RS Leaders', sorts:{}, filters:{} };
 const TAB_LIST = ['RS Leaders','1M Leaders','3M Leaders','6M Leaders','12M Leaders','Cross-TF','Momentum','Sectors'];
-const LEADER_COLS = ['rank','ticker','sector','exchange','rs_delta','rs_delta_momentum','pct_from_52w_high','price_vs_sma10','price_vs_sma20','price_vs_sma50','price_vs_sma200','percentile','pct_1m','pct_3m','pct_6m','pct_12m','rs_score','market_cap','avg_vol_30d','elite_count'];
-const CROSS_COLS = ['rank','ticker','sector','exchange','tf_count_10','avg_pct','shape_score','rs_delta','rs_delta_momentum','pct_from_52w_high','price_vs_sma50','price_vs_sma200','pct_1m','pct_3m','pct_6m','pct_12m','rs_score','elite_count'];
-const MOM_COLS = ['rank','ticker','sector','exchange','accel','rs_delta','rs_delta_momentum','pct_from_52w_high','price_vs_sma50','price_vs_sma200','pct_1m','pct_3m','pct_6m','pct_12m','rs_score','avg_vol_30d'];
+const PAGE_SIZE = 50;
+const CACHE = { stocks:[], by_rs:[], by_1m:[], by_3m:[], by_6m:[], by_12m:[], momentum:[], cross:[], sectors:[], meta:{} };
+const state = { activeTab:'RS Leaders', filters:{}, sorts:{}, page:{} };
 const PCT_COLS = new Set(['percentile','pct_1m','pct_3m','pct_6m','pct_12m']);
 const SMA_COLS = new Set(['price_vs_sma10','price_vs_sma20','price_vs_sma50','price_vs_sma200']);
-const ROWS_TOP = 30;
 
 const fmt = (v,d=1)=> (v===null||v===undefined||Number.isNaN(v))?'':Number(v).toFixed(d);
 const clsPct = v => v>=80?'g':(v<50?'r':'');
@@ -236,120 +234,217 @@ const clsRsd = v => v>5?'g':(v<-5?'r':'');
 const cls52 = v => v>=-10?'g':(v<-25?'r':'a');
 const clsSma = v => v>0?'g':'r';
 
-function badge(text,cls){ return `<span class="badge ${cls} mono">${text??''}</span>`; }
-function metaLine(){ const m=state.data.meta||{}; document.getElementById('meta').textContent=`Date ${m.date||'-'} | Liquid ${m.liquid_count||0} | Universe ${m.total_count||0}`; }
-function tabButtons(){ document.getElementById('tabs').innerHTML = TAB_LIST.map(t=>`<button class="tab ${state.activeTab===t?'active':''}" data-tab="${t}">${t}</button>`).join(''); }
-function panels(){ document.getElementById('panels').innerHTML = TAB_LIST.map(t=>`<div class="panel ${state.activeTab===t?'active':''}" data-panel="${t}"></div>`).join(''); }
+function toNumber(v){ const n=Number(v); return Number.isNaN(n) ? null : n; }
+function parseCsv(text){
+  const [h,...rows] = text.trim().split(/\\r?\\n/);
+  const cols = h.split(',');
+  return rows.map(line=>{
+    const vals = line.split(',');
+    const o = {};
+    cols.forEach((c,i)=>{ const raw=(vals[i]??'').trim(); const n=toNumber(raw); o[c]= n===null ? raw : n; });
+    return o;
+  });
+}
+function computeRowDerived(r){
+  const tfCols = ['pct_1m','pct_3m','pct_6m','pct_12m'];
+  r.tf_count_10 = tfCols.filter(c=>r[c]!=null && Number(r[c])>=90).length;
+  const vals = tfCols.map(c=>toNumber(r[c])).filter(v=>v!=null);
+  r.avg_pct = vals.length ? +(vals.reduce((a,b)=>a+b,0)/vals.length).toFixed(1) : null;
+  const p1=toNumber(r.pct_1m), p3=toNumber(r.pct_3m), p6=toNumber(r.pct_6m), p12=toNumber(r.pct_12m);
+  if([p1,p3,p6,p12].every(v=>v!=null)){
+    r.shape_score = +(((p1-p12)*0.5)+((p1-p3)*0.3)+((p3-p6)*0.2)).toFixed(1);
+  } else {
+    r.shape_score = null;
+  }
+  r.accel = (p1!=null && p3!=null) ? +(p1-p3).toFixed(1) : null;
+}
+function buildSectors(stocks){
+  const sMap = {};
+  stocks.forEach(r=>{ const s=r.sector||'Unknown'; (sMap[s]=sMap[s]||[]).push(r); });
+  return Object.entries(sMap)
+    .filter(([,g])=>g.length>=3)
+    .map(([sector, grp])=>{
+      const brd = col => (grp.filter(r=>toNumber(r[col])!=null && Number(r[col])>=70).length / grp.length) * 100;
+      const b1=brd('pct_1m'), b3=brd('pct_3m'), b6=brd('pct_6m');
+      const mb = b1*0.5 + b3*0.3 + b6*0.2;
+      const t5 = [...grp].sort((a,b)=>(Number(b.pct_1m)||-Infinity)-(Number(a.pct_1m)||-Infinity)).slice(0,5);
+      const meds = t5.map(r=>Number(r.pct_1m)||0).sort((a,b)=>a-b);
+      const ceiling = meds[Math.floor(meds.length/2)] ?? 0;
+      const avg = grp.reduce((s,r)=>s+(Number(r.pct_1m)||0),0)/grp.length;
+      const iMap = {};
+      grp.forEach(r=>{ const ind=r.industry||'Unknown'; (iMap[ind]=iMap[ind]||[]).push(Number(r.percentile)||0); });
+      const top_industries = Object.entries(iMap)
+        .map(([ind,ps])=>({ind,avg:ps.reduce((a,b)=>a+b,0)/ps.length}))
+        .sort((a,b)=>b.avg-a.avg).slice(0,3).map(x=>x.ind);
+      return {
+        sector, count:grp.length,
+        composite:+(mb*0.4 + ceiling*0.4 + avg*0.2).toFixed(1),
+        multi_breadth:+mb.toFixed(1),
+        breadth_1m:+b1.toFixed(1), breadth_3m:+b3.toFixed(1), breadth_6m:+b6.toFixed(1),
+        ceiling:+ceiling.toFixed(1), avg:+avg.toFixed(1),
+        top5:t5.map(r=>r.ticker), top_industries
+      };
+    })
+    .sort((a,b)=>b.composite-a.composite);
+}
+function buildCacheFromRows(rows){
+  const stocks = rows.map(r=>({...r}));
+  stocks.forEach(computeRowDerived);
+  CACHE.stocks = stocks;
+  CACHE.by_rs = [...stocks].sort((a,b)=>(Number(b.rs_score)||-Infinity)-(Number(a.rs_score)||-Infinity));
+  CACHE.by_1m = [...stocks].sort((a,b)=>(Number(b.pct_1m)||-Infinity)-(Number(a.pct_1m)||-Infinity));
+  CACHE.by_3m = [...stocks].sort((a,b)=>(Number(b.pct_3m)||-Infinity)-(Number(a.pct_3m)||-Infinity));
+  CACHE.by_6m = [...stocks].sort((a,b)=>(Number(b.pct_6m)||-Infinity)-(Number(a.pct_6m)||-Infinity));
+  CACHE.by_12m = [...stocks].sort((a,b)=>(Number(b.pct_12m)||-Infinity)-(Number(a.pct_12m)||-Infinity));
+  CACHE.momentum = stocks
+    .filter(r=>Number(r.pct_1m)>Number(r.pct_3m) && Number(r.pct_3m)>Number(r.pct_12m) && Number(r.pct_1m)>=60 && (Number(r.pct_1m)-Number(r.pct_3m))>=10)
+    .sort((a,b)=>(Number(b.accel)||-Infinity)-(Number(a.accel)||-Infinity));
+  CACHE.cross = stocks
+    .filter(r=>Number(r.tf_count_10)>=2)
+    .sort((a,b)=>(Number(b.tf_count_10)||-Infinity)-(Number(a.tf_count_10)||-Infinity) || (Number(b.avg_pct)||-Infinity)-(Number(a.avg_pct)||-Infinity));
+  CACHE.sectors = buildSectors(stocks);
+  const hasCol = c => stocks.length>0 && stocks.some(r=>r[c]!==undefined && r[c]!==null && r[c]!=='' );
+  CACHE.meta = {
+    date: stocks[0]?.date || (EMBEDDED.meta?.date || '-'),
+    liquid_count: stocks.length,
+    total_count: stocks.length,
+    has_sma10: hasCol('price_vs_sma10'),
+    has_sma20: hasCol('price_vs_sma20'),
+    has_rs_delta: hasCol('rs_delta'),
+    has_rs_delta_momentum: hasCol('rs_delta_momentum'),
+    has_pct_52w: hasCol('pct_from_52w_high')
+  };
+}
+function loadEmbedded(){
+  buildCacheFromRows(EMBEDDED.stocks || []);
+  if((EMBEDDED.meta||{}).total_count) CACHE.meta.total_count = EMBEDDED.meta.total_count;
+}
 
-function applyCommonFilters(rows,f){
-  return rows.filter(r=>{
-    if(f.rsDeltaRising && !(Number(r.rs_delta)>0)) return false;
-    if(f.near52 && !(Number(r.pct_from_52w_high)>=-15)) return false;
-    if(f.sma50 && !(Number(r.price_vs_sma50)>0)) return false;
-    if(f.sma200 && !(Number(r.price_vs_sma200)>0)) return false;
-    if(f.topPct){
-      const p = Number(r.percentile||0);
-      const min = 100 - f.topPct;
-      if(!(p>=min)) return false;
-    }
+function resetUiState(){
+  TAB_LIST.forEach(tab=>{ state.filters[tab]={}; state.sorts[tab]=[]; state.page[tab]=PAGE_SIZE; });
+}
+function defaultSortForTab(tab){
+  const m = { 'RS Leaders':'rs_score','1M Leaders':'pct_1m','3M Leaders':'pct_3m','6M Leaders':'pct_6m','12M Leaders':'pct_12m','Cross-TF':'tf_count_10','Momentum':'accel' };
+  return m[tab];
+}
+function baseForTab(tab){
+  if(tab==='RS Leaders') return CACHE.by_rs;
+  if(tab==='1M Leaders') return CACHE.by_1m;
+  if(tab==='3M Leaders') return CACHE.by_3m;
+  if(tab==='6M Leaders') return CACHE.by_6m;
+  if(tab==='12M Leaders') return CACHE.by_12m;
+  if(tab==='Cross-TF') return CACHE.cross;
+  if(tab==='Momentum') return CACHE.momentum;
+  return CACHE.stocks;
+}
+function getFilteredRows(tab){
+  const base = baseForTab(tab);
+  const f = state.filters[tab] || {};
+  return base.filter(r=>{
+    if(f.rising && !(r.rs_delta!=null && Number(r.rs_delta)>0)) return false;
+    if(f.near52 && !(r.pct_from_52w_high!=null && Number(r.pct_from_52w_high)>=-15)) return false;
+    if(f.sma10 && !(r.price_vs_sma10!=null && Number(r.price_vs_sma10)>0)) return false;
+    if(f.sma20 && !(r.price_vs_sma20!=null && Number(r.price_vs_sma20)>0)) return false;
+    if(f.sma50 && !(r.price_vs_sma50!=null && Number(r.price_vs_sma50)>0)) return false;
+    if(f.sma200 && !(r.price_vs_sma200!=null && Number(r.price_vs_sma200)>0)) return false;
+    if(f.accel && !(r.shape_score!=null && Number(r.shape_score)>0)) return false;
+    if(f.minTf && !(Number(r.tf_count_10)>=Number(f.minTf))) return false;
+    if(f.topPct){ const min=100-f.topPct; if(!(Number(r.percentile)>=min)) return false; }
     return true;
   });
 }
-
-function sortRows(rows,tab){
-  const sorters = state.sorts[tab] || [{key: tab==='Momentum'?'accel':'rs_score', dir:'desc'}];
-  return [...rows].sort((a,b)=>{
-    for(const s of sorters){
-      const av = a[s.key], bv = b[s.key];
-      if(av===bv) continue;
-      const na = Number(av), nb = Number(bv);
+function getSortedFilteredRows(tab){
+  const filtered = getFilteredRows(tab);
+  const sorts = state.sorts[tab] || [];
+  if(!sorts.length) return filtered;
+  return [...filtered].sort((a,b)=>{
+    for(const {col,dir} of sorts){
+      const va = a[col] ?? -Infinity, vb = b[col] ?? -Infinity;
+      const na = Number(va), nb = Number(vb);
       const bothNum = !Number.isNaN(na) && !Number.isNaN(nb);
-      const cmp = bothNum ? (na-nb) : String(av??'').localeCompare(String(bv??''));
-      if(cmp!==0) return s.dir==='asc'?cmp:-cmp;
+      const cmp = bothNum ? (na-nb) : String(va).localeCompare(String(vb));
+      if(cmp!==0) return dir==='asc' ? cmp : -cmp;
     }
     return 0;
   });
 }
-
-function headerCell(tab,col,label){
-  return `<th data-sort-tab="${tab}" data-sort-col="${col}">${label||col}</th>`;
+function updateSort(tab,col,shift){
+  const arr = state.sorts[tab] || [];
+  const i = arr.findIndex(s=>s.col===col);
+  if(i>=0){ arr[i].dir = arr[i].dir==='asc' ? 'desc' : 'asc'; }
+  else { arr.push({col,dir:'desc'}); }
+  state.sorts[tab] = shift ? arr : [arr[arr.length-1]];
 }
-function td(col,v){
+
+function badge(text,cls){ return `<span class="badge ${cls} mono">${text??''}</span>`; }
+function valueCell(col,v){
   if(col==='ticker') return `<td class="mono" style="text-align:left">${v||''}</td>`;
   if(col==='sector') return `<td style="text-align:left">${badge(v,'sector')}</td>`;
   if(col==='exchange') return `<td>${badge(v,'exch')}</td>`;
-  let cls = '';
-  if(PCT_COLS.has(col)) cls = clsPct(Number(v));
-  if(col==='rs_delta') cls = clsRsd(Number(v));
-  if(col==='pct_from_52w_high') cls = cls52(Number(v));
-  if(SMA_COLS.has(col)) cls = clsSma(Number(v));
+  let cls='';
+  if(PCT_COLS.has(col)) cls=clsPct(Number(v));
+  if(col==='rs_delta') cls=clsRsd(Number(v));
+  if(col==='pct_from_52w_high') cls=cls52(Number(v));
+  if(SMA_COLS.has(col)) cls=clsSma(Number(v));
   const d = ['rank','tf_count_10','elite_count'].includes(col)?0:1;
   return `<td class="mono ${cls}">${typeof v==='number'?fmt(v,d):(v??'')}</td>`;
 }
-
-function tableHtml(tab,rows,cols){
+function tableHtml(tab,rows,cols,total){
   const shown = cols.filter(c=>rows.some(r=>r[c]!==null && r[c]!==undefined && r[c]!=='' ));
-  const hdr = shown.map(c=>headerCell(tab,c,c)).join('');
-  const body = rows.map(r=>`<tr>${shown.map(c=>td(c,r[c])).join('')}</tr>`).join('');
-  return `<div class="table-wrap"><table><thead><tr>${hdr}</tr></thead><tbody>${body}</tbody></table></div>`;
+  const sort0 = (state.sorts[tab]||[])[0];
+  const hdr = shown.map(c=>{
+    const marker = sort0 && sort0.col===c ? (sort0.dir==='asc'?' ▲':' ▼') : '';
+    return `<th data-sort-tab="${tab}" data-sort-col="${c}">${c}${marker}</th>`;
+  }).join('');
+  const body = rows.map(r=>`<tr>${shown.map(c=>valueCell(c,r[c])).join('')}</tr>`).join('');
+  const shownCount = rows.length;
+  const loadMore = total>shownCount
+    ? `<div class="meta" style="padding:8px 4px">Showing ${shownCount} of ${total} <button class="btn" data-loadmore="${tab}">Load ${PAGE_SIZE} more</button></div>`
+    : `<div class="meta" style="padding:8px 4px">Showing all ${total} results</div>`;
+  return `<div class="table-wrap"><table><thead><tr>${hdr}</tr></thead><tbody>${body}</tbody></table>${loadMore}</div>`;
 }
 
-function controlsLeader(tab){
-  const f = state.filters[tab]||{};
+function topPills(tab){
+  const f = state.filters[tab] || {};
+  return [1,2,5,10,20].map(p=>`<span class="pill ${f.topPct===p?'active':''}" data-top="${tab}" data-v="${p}">TOP ${p}%</span>`).join('');
+}
+function commonControls(tab, opts={}){
+  const f = state.filters[tab] || {};
+  const has10 = CACHE.meta.has_sma10, has20 = CACHE.meta.has_sma20;
   return `<div class="controls">
-    <label><input type="checkbox" data-f="${tab}" data-k="rsDeltaRising" ${f.rsDeltaRising?'checked':''}/> RS Δ Rising</label>
+    ${opts.top ? `<div class="chips">${topPills(tab)}</div>` : ''}
+    ${opts.minTf ? `<div class="chips">${[2,3,4].map(v=>`<span class="pill ${(f.minTf||2)===v?'active':''}" data-min-tf="${v}">${v}</span>`).join('')}</div>` : ''}
+    ${opts.accel ? `<label><input type="checkbox" data-f="${tab}" data-k="accel" ${f.accel?'checked':''}/> Accelerating Only</label>` : ''}
+    ${opts.rising !== false ? `<label><input type="checkbox" data-f="${tab}" data-k="rising" ${f.rising?'checked':''}/> RS Δ Rising</label>` : ''}
     <label><input type="checkbox" data-f="${tab}" data-k="near52" ${f.near52?'checked':''}/> Near 52W Hi</label>
+    ${has10 ? `<button class="btn" data-toggle="${tab}" data-k="sma10">SMA10 ↑ ${f.sma10?'ON':'OFF'}</button>` : ''}
+    ${has20 ? `<button class="btn" data-toggle="${tab}" data-k="sma20">SMA20 ↑ ${f.sma20?'ON':'OFF'}</button>` : ''}
     <button class="btn" data-toggle="${tab}" data-k="sma50">SMA50 ↑ ${f.sma50?'ON':'OFF'}</button>
     <button class="btn" data-toggle="${tab}" data-k="sma200">SMA200 ↑ ${f.sma200?'ON':'OFF'}</button>
-    <div class="chips">${[1,2,5,10,20].map(p=>`<span class="pill ${f.topPct===p?'active':''}" data-top="${tab}" data-v="${p}">TOP ${p}%</span>`).join('')}</div>
   </div>`;
 }
-
-function renderLeaders(tab,key){
-  const p = document.querySelector(`[data-panel="${tab}"]`);
-  const f = state.filters[tab]||{};
-  let rows = sortRows(applyCommonFilters(state.data.stocks,f),tab).slice(0,ROWS_TOP);
-  rows = sortRows(rows,tab==='RS Leaders'?tab:key);
-  p.innerHTML = controlsLeader(tab) + tableHtml(tab, rows.sort((a,b)=>Number(b[key])-Number(a[key])), LEADER_COLS);
+function renderTableTab(tab, cols, controlsHtml){
+  const panel = document.querySelector(`[data-panel="${tab}"]`);
+  const all = getSortedFilteredRows(tab);
+  const pageSize = state.page[tab] || PAGE_SIZE;
+  const visible = all.slice(0, pageSize);
+  panel.innerHTML = controlsHtml + tableHtml(tab, visible, cols, all.length);
 }
-
+function renderLeaders(tab){
+  const cols = ['rank','ticker','sector','exchange','rs_delta','rs_delta_momentum','pct_from_52w_high','price_vs_sma10','price_vs_sma20','price_vs_sma50','price_vs_sma200','percentile','pct_1m','pct_3m','pct_6m','pct_12m','rs_score','market_cap','avg_vol_30d','elite_count'];
+  renderTableTab(tab, cols, commonControls(tab,{top:true}));
+}
 function renderCross(){
-  const tab = 'Cross-TF';
-  const p = document.querySelector('[data-panel="Cross-TF"]');
-  const f = state.filters[tab]||{};
-  let rows = [...state.data.cross];
-  rows = rows.filter(r=>Number(r.tf_count_10)>=Number(f.minTf||2));
-  if(f.accelOnly) rows = rows.filter(r=>Number(r.shape_score)>0);
-  rows = applyCommonFilters(rows,f);
-  rows = sortRows(rows,tab);
-  p.innerHTML = `<div class="controls">
-    <div class="chips">${[2,3,4].map(v=>`<span class="pill ${Number(f.minTf||2)===v?'active':''}" data-min-tf="${v}">${v}</span>`).join('')}</div>
-    <label><input type="checkbox" data-f="${tab}" data-k="accelOnly" ${f.accelOnly?'checked':''}/> Accelerating Only</label>
-    <label><input type="checkbox" data-f="${tab}" data-k="rsDeltaRising" ${f.rsDeltaRising?'checked':''}/> RS Δ Rising</label>
-    <button class="btn" data-toggle="${tab}" data-k="sma50">SMA50 ↑ ${f.sma50?'ON':'OFF'}</button>
-    <button class="btn" data-toggle="${tab}" data-k="sma200">SMA200 ↑ ${f.sma200?'ON':'OFF'}</button>
-  </div>` + tableHtml(tab, rows, CROSS_COLS);
+  const cols = ['rank','ticker','sector','exchange','tf_count_10','avg_pct','shape_score','rs_delta','rs_delta_momentum','pct_from_52w_high','price_vs_sma10','price_vs_sma20','price_vs_sma50','price_vs_sma200','pct_1m','pct_3m','pct_6m','pct_12m','rs_score','elite_count'];
+  renderTableTab('Cross-TF', cols, commonControls('Cross-TF',{minTf:true,accel:true}));
 }
-
 function renderMomentum(){
-  const tab = 'Momentum';
-  const p = document.querySelector('[data-panel="Momentum"]');
-  const f = state.filters[tab]||{};
-  let rows = [...state.data.momentum];
-  if(f.near52) rows = rows.filter(r=>Number(r.pct_from_52w_high)>=-15);
-  if(f.rsDeltaRising) rows = rows.filter(r=>Number(r.rs_delta)>0);
-  if(f.sma200) rows = rows.filter(r=>Number(r.price_vs_sma200)>0);
-  rows = sortRows(rows,tab);
-  p.innerHTML = `<div class="controls">
-    <label><input type="checkbox" data-f="${tab}" data-k="near52" ${f.near52?'checked':''}/> Near 52W Hi</label>
-    <label><input type="checkbox" data-f="${tab}" data-k="rsDeltaRising" ${f.rsDeltaRising?'checked':''}/> RS Δ Rising</label>
-    <button class="btn" data-toggle="${tab}" data-k="sma200">SMA200 ↑ ${f.sma200?'ON':'OFF'}</button>
-  </div>` + tableHtml(tab, rows, MOM_COLS);
+  const cols = ['rank','ticker','sector','exchange','accel','rs_delta','rs_delta_momentum','pct_from_52w_high','price_vs_sma10','price_vs_sma20','price_vs_sma50','price_vs_sma200','pct_1m','pct_3m','pct_6m','pct_12m','rs_score','avg_vol_30d'];
+  renderTableTab('Momentum', cols, commonControls('Momentum',{top:false}));
 }
-
 function renderSectors(){
   const p = document.querySelector('[data-panel="Sectors"]');
-  const cards = (state.data.sectors||[]).map(s=>`
+  const cards = (CACHE.sectors||[]).map(s=>`
     <div class="card">
       <div style="display:flex;justify-content:space-between;align-items:center"><h4 style="margin:0">${s.sector}</h4><span class="mono">${s.count} stocks</span></div>
       <div class="mono" style="font-size:30px;font-weight:700;margin:8px 0">${fmt(s.composite,1)}</div>
@@ -360,52 +455,29 @@ function renderSectors(){
   p.innerHTML = `<div class="meta" style="margin-bottom:8px">composite=(multi_breadth*0.4)+(ceiling*0.4)+(avg*0.2), multi_breadth=(breadth_1m*0.5)+(breadth_3m*0.3)+(breadth_6m*0.2)</div><div class="cards">${cards}</div>`;
 }
 
-function renderActive(){
-  metaLine(); tabButtons(); panels();
-  renderLeaders('RS Leaders','rs_score');
-  renderLeaders('1M Leaders','pct_1m');
-  renderLeaders('3M Leaders','pct_3m');
-  renderLeaders('6M Leaders','pct_6m');
-  renderLeaders('12M Leaders','pct_12m');
-  renderCross(); renderMomentum(); renderSectors();
+function renderMeta(){ const m=CACHE.meta||{}; document.getElementById('meta').textContent=`Date ${m.date||'-'} | Liquid ${m.liquid_count||0} | Universe ${m.total_count||0}`; }
+function renderShell(){
+  document.getElementById('tabs').innerHTML = TAB_LIST.map(t=>`<button class="tab ${state.activeTab===t?'active':''}" data-tab="${t}">${t}</button>`).join('');
+  document.getElementById('panels').innerHTML = TAB_LIST.map(t=>`<div class="panel ${state.activeTab===t?'active':''}" data-panel="${t}"></div>`).join('');
+}
+function renderTab(tab){
+  state.activeTab = tab;
+  renderShell();
+  if(tab==='RS Leaders') return renderLeaders('RS Leaders');
+  if(tab==='1M Leaders') return renderLeaders('1M Leaders');
+  if(tab==='3M Leaders') return renderLeaders('3M Leaders');
+  if(tab==='6M Leaders') return renderLeaders('6M Leaders');
+  if(tab==='12M Leaders') return renderLeaders('12M Leaders');
+  if(tab==='Cross-TF') return renderCross();
+  if(tab==='Momentum') return renderMomentum();
+  return renderSectors();
 }
 
-function updateSort(tab,col,shift){
-  const arr = state.sorts[tab] || [];
-  const i = arr.findIndex(s=>s.key===col);
-  if(i>=0){ arr[i].dir = arr[i].dir==='asc'?'desc':'asc'; }
-  else { arr.push({key:col,dir:'desc'}); }
-  state.sorts[tab] = shift ? arr : [arr[arr.length-1]];
-}
-
-function bind(){
-  document.addEventListener('click',ev=>{
-    const t = ev.target;
-    if(t.matches('[data-tab]')){ state.activeTab=t.dataset.tab; renderActive(); bind(); return; }
-    if(t.matches('[data-sort-col]')){ updateSort(t.dataset.sortTab,t.dataset.sortCol,ev.shiftKey); renderActive(); bind(); return; }
-    if(t.matches('[data-toggle]')){ const tab=t.dataset.toggle; const k=t.dataset.k; state.filters[tab]=state.filters[tab]||{}; state.filters[tab][k]=!state.filters[tab][k]; renderActive(); bind(); return; }
-    if(t.matches('[data-top]')){ const tab=t.dataset.top; state.filters[tab]=state.filters[tab]||{}; const v=Number(t.dataset.v); state.filters[tab].topPct=(state.filters[tab].topPct===v?null:v); renderActive(); bind(); return; }
-    if(t.matches('[data-min-tf]')){ state.filters['Cross-TF']=state.filters['Cross-TF']||{}; state.filters['Cross-TF'].minTf=Number(t.dataset.minTf); renderActive(); bind(); return; }
-  });
-  document.addEventListener('change',ev=>{
-    const t = ev.target;
-    if(t.matches('input[data-f]')){ const tab=t.dataset.f; const k=t.dataset.k; state.filters[tab]=state.filters[tab]||{}; state.filters[tab][k]=t.checked; renderActive(); bind(); }
-  });
-  document.getElementById('helpBtn').onclick=()=>{ document.getElementById('helpModal').classList.add('open'); };
-  document.getElementById('closeHelp').onclick=()=>{ document.getElementById('helpModal').classList.remove('open'); };
-  document.getElementById('loadCsvBtn').onclick=()=>document.getElementById('csvInput').click();
-  document.getElementById('csvInput').onchange=async ev=>{
-    const file = ev.target.files[0]; if(!file) return;
-    const txt = await file.text();
-    const [h,...rows] = txt.trim().split(/\\r?\\n/);
-    const cols = h.split(',');
-    state.data.stocks = rows.map(line=>{ const vals=line.split(','); const o={}; cols.forEach((c,i)=>{ const raw=vals[i]; const n=Number(raw); o[c]=Number.isNaN(n)?raw:n; }); return o; });
-    state.data.cross = state.data.stocks.filter(r=>Number(r.tf_count_10)>=2);
-    state.data.momentum = state.data.stocks.filter(r=>Number(r.pct_1m)>Number(r.pct_3m) && Number(r.pct_3m)>Number(r.pct_12m) && Number(r.pct_1m)>=60 && (Number(r.pct_1m)-Number(r.pct_3m))>=10).map(r=>({...r,accel:Number(r.pct_1m)-Number(r.pct_3m)}));
-    state.data.meta = { ...(state.data.meta||{}), liquid_count: state.data.stocks.length, total_count: state.data.stocks.length };
-    renderActive(); bind();
-  };
-  renderHelp();
+function onFilterChange(tab){ state.page[tab]=PAGE_SIZE; renderTab(tab); }
+function switchTab(tab){
+  state.sorts[tab] = [];
+  state.page[tab] = PAGE_SIZE;
+  renderTab(tab);
 }
 
 function renderHelp(){
@@ -419,23 +491,57 @@ function renderHelp(){
     'Workflow':'1) Check SPY vs key MAs. 2) Focus top 2-3 sectors. 3) Cross-TF MIN=3 accelerating. 4) Momentum tab with RS Δ rising + near highs. 5) Cross-reference names across tabs. 6) Run chart review before entry.'
   };
   document.getElementById('helpPanels').innerHTML=tabs.map((t,i)=>`<div class="panel ${i===0?'active':''}" data-hp="${t}"><p>${content[t]}</p></div>`).join('');
-  document.querySelectorAll('[data-ht]').forEach(btn=>btn.onclick=()=>{
-    document.querySelectorAll('[data-ht]').forEach(x=>x.classList.remove('active'));
-    document.querySelectorAll('[data-hp]').forEach(x=>x.classList.remove('active'));
-    btn.classList.add('active');
-    document.querySelector(`[data-hp="${btn.dataset.ht}"]`).classList.add('active');
-  });
-  document.addEventListener('click',ev=>{
-    const p = ev.target.dataset.preset; if(!p) return;
-    if(p==='HIGH CONVICTION'){ state.activeTab='RS Leaders'; state.filters['RS Leaders']={near52:true,sma50:true,sma200:true}; state.sorts['RS Leaders']=[{key:'rs_score',dir:'desc'}]; }
-    if(p==='CATCHING BREATH'){ state.activeTab='RS Leaders'; state.filters['RS Leaders']={sma50:true,sma200:true}; state.sorts['RS Leaders']=[{key:'pct_from_52w_high',dir:'desc'}]; }
-    if(p==='STALLING LEADER'){ state.activeTab='RS Leaders'; state.filters['RS Leaders']={}; state.sorts['RS Leaders']=[{key:'rs_delta',dir:'asc'}]; }
-    if(p==='EMERGING LEADER'){ state.activeTab='Cross-TF'; state.filters['Cross-TF']={accelOnly:true,minTf:2}; state.sorts['Cross-TF']=[{key:'tf_count_10',dir:'desc'},{key:'avg_pct',dir:'desc'}]; }
-    document.getElementById('helpModal').classList.remove('open'); renderActive(); bind();
-  });
 }
 
-renderActive(); bind();
+function bindEvents(){
+  document.addEventListener('click',ev=>{
+    const t=ev.target;
+    if(t.matches('[data-tab]')) return switchTab(t.dataset.tab);
+    if(t.matches('[data-sort-col]')){ updateSort(t.dataset.sortTab,t.dataset.sortCol,ev.shiftKey); return renderTab(t.dataset.sortTab); }
+    if(t.matches('[data-toggle]')){ const tab=t.dataset.toggle; const k=t.dataset.k; state.filters[tab][k]=!state.filters[tab][k]; return onFilterChange(tab); }
+    if(t.matches('[data-top]')){ const tab=t.dataset.top; const v=Number(t.dataset.v); state.filters[tab].topPct = state.filters[tab].topPct===v ? null : v; return onFilterChange(tab); }
+    if(t.matches('[data-min-tf]')){ state.filters['Cross-TF'].minTf = Number(t.dataset.minTf); return onFilterChange('Cross-TF'); }
+    if(t.matches('[data-loadmore]')){ const tab=t.dataset.loadmore; state.page[tab]=(state.page[tab]||PAGE_SIZE)+PAGE_SIZE; return renderTab(tab); }
+    if(t.matches('[data-ht]')){
+      document.querySelectorAll('[data-ht]').forEach(x=>x.classList.remove('active'));
+      document.querySelectorAll('[data-hp]').forEach(x=>x.classList.remove('active'));
+      t.classList.add('active');
+      const panel=document.querySelector(`[data-hp="${t.dataset.ht}"]`); if(panel) panel.classList.add('active');
+      return;
+    }
+    if(t.matches('[data-preset]')){
+      const p=t.dataset.preset;
+      if(p==='HIGH CONVICTION'){ state.filters['RS Leaders']={near52:true,sma50:true,sma200:true}; state.sorts['RS Leaders']=[{col:'rs_score',dir:'desc'}]; state.page['RS Leaders']=PAGE_SIZE; renderTab('RS Leaders'); }
+      if(p==='CATCHING BREATH'){ state.filters['RS Leaders']={sma50:true,sma200:true}; state.sorts['RS Leaders']=[{col:'pct_from_52w_high',dir:'desc'}]; state.page['RS Leaders']=PAGE_SIZE; renderTab('RS Leaders'); }
+      if(p==='STALLING LEADER'){ state.filters['RS Leaders']={}; state.sorts['RS Leaders']=[{col:'rs_delta',dir:'asc'}]; state.page['RS Leaders']=PAGE_SIZE; renderTab('RS Leaders'); }
+      if(p==='EMERGING LEADER'){ state.filters['Cross-TF']={accel:true,minTf:2}; state.sorts['Cross-TF']=[{col:'tf_count_10',dir:'desc'},{col:'avg_pct',dir:'desc'}]; state.page['Cross-TF']=PAGE_SIZE; renderTab('Cross-TF'); }
+      document.getElementById('helpModal').classList.remove('open');
+      return;
+    }
+  });
+  document.addEventListener('change',ev=>{
+    const t=ev.target;
+    if(t.matches('input[data-f]')){ const tab=t.dataset.f; const k=t.dataset.k; state.filters[tab][k]=t.checked; onFilterChange(tab); }
+  });
+  document.getElementById('helpBtn').onclick=()=>document.getElementById('helpModal').classList.add('open');
+  document.getElementById('closeHelp').onclick=()=>document.getElementById('helpModal').classList.remove('open');
+  document.getElementById('loadCsvBtn').onclick=()=>document.getElementById('csvInput').click();
+  document.getElementById('csvInput').onchange=async ev=>{
+    const file = ev.target.files[0]; if(!file) return;
+    const rows = parseCsv(await file.text());
+    buildCacheFromRows(rows);
+    resetUiState();
+    renderMeta();
+    renderTab(state.activeTab);
+  };
+}
+
+loadEmbedded();
+resetUiState();
+renderMeta();
+renderHelp();
+bindEvents();
+renderTab(state.activeTab);
 """
     c = """
 </script>
